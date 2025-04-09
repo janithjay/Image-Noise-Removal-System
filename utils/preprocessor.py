@@ -180,12 +180,12 @@ class TraditionalDenoiser:
             Denoised image
         """
         if self.method == 'bilateral':
-            # Bilateral filtering
-            return denoise_bilateral(image, sigma_color=0.1, sigma_spatial=15)
+            # Bilateral filtering for RGB images
+            return denoise_bilateral(image, sigma_color=0.1, sigma_spatial=15, channel_axis=-1)
         
         elif self.method == 'wavelet':
             # Wavelet denoising
-            return denoise_wavelet(image, method='BayesShrink', mode='soft', rescale_sigma=True)
+            return denoise_wavelet(image, method='BayesShrink', mode='soft', rescale_sigma=True, channel_axis=-1)
         
         elif self.method == 'median':
             # Median filtering

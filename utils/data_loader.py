@@ -4,8 +4,8 @@ Utilities for loading and processing image data.
 
 import os
 import numpy as np
-from tensorflow.keras.preprocessing.image import load_img, img_to_array
-from tensorflow.keras.utils import to_categorical
+from keras.utils import img_to_array, load_img
+from keras.utils import to_categorical
 import cv2
 from sklearn.model_selection import train_test_split
 

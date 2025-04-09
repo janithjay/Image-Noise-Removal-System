@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Noise Removal System</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f8f9fa;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            background-color: #4a6fa5;
+            color: white;
+            padding: 20px 0;
+            text-align: center;
+            margin-bottom: 30px;
+            box-shadow: 0 3px 5px rgba(0,0,0,0.1);
+        }
+        h1 {
+            margin: 0;
+        }
+        .card {
+            background-color: #fff;
+            border-radius: 8px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+        }
+        .input-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+        }
+        .btn {
+            display: inline-block;
+            background-color: #4a6fa5;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        .btn:hover {
+            background-color: #3a5a80;
+        }
+        .error {
+            color: #d9534f;
+            margin-top: 10px;
+        }
+        .info-box {
+            background-color: #e9f7fe;
+            border-left: 4px solid #4a6fa5;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #6c757d;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>Image Noise Removal System</h1>
+        </div>
+    </header>
+    
+    <div class="container">
+        <div class="card">
+            <h2>Upload a Noisy Image</h2>
+            <div class="info-box">
+                <p>Upload an image containing noise, and our system will process it to remove the noise and enhance the image quality.</p>
+                <p>Supported file types: JPG, JPEG, PNG</p>
+            </div>
+            
+            {% if error %}
+            <div class="error">
+                <p>{{ error }}</p>
+            </div>
+            {% endif %}
+            
+            <form action="/denoise" method="post" enctype="multipart/form-data">
+                <div class="input-group">
+                    <label for="file">Select an image file:</label>
+                    <input type="file" id="file" name="file" accept=".jpg, .jpeg, .png" required>
+                </div>
+                
+                <button type="submit" class="btn">Denoise Image</button>
+            </form>
+        </div>
+        
+        <div class="card">
+            <h2>How It Works</h2>
+            <p>Our image noise removal system uses an advanced autoencoder neural network to identify and remove various types of image noise, including:</p>
+            <ul>
+                <li>Gaussian noise</li>
+                <li>Salt and pepper noise</li>
+                <li>Speckle noise</li>
+            </ul>
+            <p>The system maintains the important details and structures in your image while effectively eliminating noise patterns.</p>
+        </div>
+    </div>
+    
+    <footer class="container">
+        <p>Image Noise Removal System &copy; 2023</p>
+    </footer>
+</body>
+</html> 

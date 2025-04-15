@@ -14,7 +14,7 @@
             background-color: #f8f9fa;
         }
         .container {
-            max-width: 900px;
+            max-width: 1100px;
             margin: 0 auto;
             padding: 20px;
         }
@@ -43,11 +43,16 @@
             margin-top: 20px;
         }
         .result-box {
-            flex: 0 0 48%;
+            flex: 0 0 31%;
             text-align: center;
             margin-bottom: 20px;
         }
-        .result-box img {
+        .combined-box {
+            flex: 0 0 100%;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .result-box img, .combined-box img {
             max-width: 100%;
             height: auto;
             border-radius: 4px;
@@ -78,6 +83,13 @@
             text-align: center;
             margin-top: 20px;
         }
+        .metrics {
+            text-align: center;
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f0f4f8;
+            border-radius: 4px;
+        }
         @media (max-width: 768px) {
             .result-box {
                 flex: 0 0 100%;
@@ -96,6 +108,25 @@
         <div class="card">
             <h2>Denoising Result</h2>
             
+            <div class="combined-box">
+                <h3>Combined Visualization</h3>
+                <img src="{{ combined }}" alt="Combined Image Visualization">
+            </div>
+            
+            {% if metrics %}
+            <div class="metrics">
+                <h3>Performance Metrics</h3>
+                <p>
+                    <strong>PSNR:</strong> {{ "%.2f"|format(metrics.PSNR) }} dB 
+                    (Peak Signal-to-Noise Ratio - higher is better)
+                </p>
+                <p>
+                    <strong>SSIM:</strong> {{ "%.4f"|format(metrics.SSIM) }}
+                    (Structural Similarity Index - closer to 1 is better)
+                </p>
+            </div>
+            {% endif %}
+            
             <div class="results-container">
                 <div class="result-box">
                     <h3>Original Image</h3>
@@ -103,20 +134,26 @@
                 </div>
                 
                 <div class="result-box">
+                    <h3>Noisy Image</h3>
+                    <img src="{{ noisy }}" alt="Noisy Image">
+                </div>
+                
+                <div class="result-box">
                     <h3>Denoised Image</h3>
-                    <img src="{{ result }}" alt="Denoised Image">
+                    <img src="{{ denoised }}" alt="Denoised Image">
                 </div>
             </div>
             
             <div class="btn-group">
                 <a href="/" class="btn">Process Another Image</a>
+                <a href="{{ combined }}" download class="btn">Download Combined View</a>
             </div>
         </div>
         
         <div class="card">
             <h3>About the Denoising Process</h3>
             <p>The system has successfully processed your image using an advanced autoencoder neural network. The denoising algorithm identifies noise patterns while preserving important image details and structures.</p>
-            <p>For best results, you can save the denoised image by right-clicking on it and selecting "Save image as..."</p>
+            <p>The combined visualization shows the original image, the noisy version, and the denoised result side by side for easy comparison. The metrics provide a quantitative measure of denoising performance.</p>
         </div>
     </div>
     

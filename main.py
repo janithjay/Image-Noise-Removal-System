@@ -12,7 +12,8 @@ from PIL import Image
 
 from model import DenoisingAutoencoder, Trainer
 from utils.data_loader import DataLoader
-from utils.preprocessor import NoiseGenerator, ImagePreprocessor
+from utils.preprocessor import NoiseGenerator, ImagePreprocessor, TraditionalDenoiser
+from utils.visualizer import combine_images, calculate_metrics
 
 def train_model(data_dir, model_save_dir, epochs=None):
     """
@@ -104,7 +105,23 @@ def denoise_image(image_path, model_path, output_path=None):
     preprocessor = ImagePreprocessor()
     
     print(f"Loading image: {image_path}")
-    noisy_img = data_loader.load_single_image(image_path)
+    # Load image as original clean image
+    original_img = Image.open(image_path)
+    original_array = img_to_array(original_img) / 255.0
+    
+    # Convert to model input format
+    input_img = preprocessor.preprocess_image(original_array)
+    input_img = np.expand_dims(input_img, axis=0)
+    
+    # Generate noisy version
+    print("Generating noisy version")
+    noise_gen = NoiseGenerator()
+    noisy_array = noise_gen.add_noise(input_img)[0]
+    
+    # Save the noisy image
+    noisy_path = image_path.rsplit('.', 1)[0] + '_noisy.' + image_path.rsplit('.', 1)[1]
+    noisy_img = array_to_img(noisy_array)
+    noisy_img.save(noisy_path)
     
     # Load model
     print(f"Loading model: {model_path}")
@@ -112,36 +129,46 @@ def denoise_image(image_path, model_path, output_path=None):
     
     # Denoise image
     print("Denoising image")
-    denoised_img = model.predict(noisy_img)[0]
+    denoised_array = model.predict(input_img)[0]
     
     # Clip values to valid range
-    denoised_img = np.clip(denoised_img, 0, 1)
+    denoised_array = np.clip(denoised_array, 0, 1)
     
     # Convert to PIL Image
-    denoised_pil = array_to_img(denoised_img)
+    denoised_img = array_to_img(denoised_array)
     
-    # Save denoised image if output path provided
-    if output_path:
-        print(f"Saving denoised image to: {output_path}")
-        denoised_pil.save(output_path)
+    # Set default output path if not provided
+    if not output_path:
+        output_path = image_path.rsplit('.', 1)[0] + '_denoised.' + image_path.rsplit('.', 1)[1]
     
-    # Display original and denoised
-    plt.figure(figsize=(12, 6))
+    # Save denoised image
+    print(f"Saving denoised image to: {output_path}")
+    denoised_img.save(output_path)
     
-    plt.subplot(1, 2, 1)
-    plt.imshow(noisy_img[0])
-    plt.title('Noisy Image')
+    # Calculate metrics
+    metrics = calculate_metrics(input_img[0], denoised_array)
+    print(f"PSNR: {metrics['PSNR']:.2f} dB, SSIM: {metrics['SSIM']:.4f}")
+    
+    # Create and save combined visualization
+    combined_path = image_path.rsplit('.', 1)[0] + '_combined.' + image_path.rsplit('.', 1)[1]
+    print(f"Creating combined visualization: {combined_path}")
+    combine_images(
+        image_path,
+        noisy_path,
+        output_path,
+        save_path=combined_path,
+        metrics=metrics
+    )
+    
+    # Display combined image
+    combined_img = Image.open(combined_path)
+    plt.figure(figsize=(15, 10))
+    plt.imshow(np.array(combined_img))
     plt.axis('off')
-    
-    plt.subplot(1, 2, 2)
-    plt.imshow(denoised_img)
-    plt.title('Denoised Image')
-    plt.axis('off')
-    
     plt.tight_layout()
     plt.show()
     
-    return denoised_pil
+    return denoised_img
 
 def main():
     """

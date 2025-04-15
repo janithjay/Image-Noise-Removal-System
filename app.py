@@ -11,7 +11,8 @@ from PIL import Image
 
 from model import DenoisingAutoencoder
 from utils.data_loader import DataLoader
-from utils.preprocessor import NoiseGenerator
+from utils.preprocessor import NoiseGenerator, TraditionalDenoiser
+from utils.visualizer import combine_images, calculate_metrics
 
 app = Flask(__name__)
 
@@ -43,8 +44,18 @@ def process_image(image_path, model_path):
         model_path: Path to the trained model
         
     Returns:
-        Path to the processed image
+        Paths to the processed images (original, noisy, denoised, combined)
     """
+    # Generate unique filenames
+    base_filename = uuid.uuid4().hex
+    noisy_filename = f"noisy_{base_filename}.png"
+    denoised_filename = f"denoised_{base_filename}.png"
+    combined_filename = f"combined_{base_filename}.png"
+    
+    noisy_path = os.path.join(app.config['RESULTS_FOLDER'], noisy_filename)
+    denoised_path = os.path.join(app.config['RESULTS_FOLDER'], denoised_filename)
+    combined_path = os.path.join(app.config['RESULTS_FOLDER'], combined_filename)
+    
     # Check if model exists
     if not os.path.exists(model_path):
         # If model doesn't exist, add noise manually as a demo
@@ -59,13 +70,20 @@ def process_image(image_path, model_path):
         noise_gen = NoiseGenerator()
         noisy_array = noise_gen.add_noise(np.expand_dims(img_array, axis=0))[0]
         
-        # Save noisy image as the "processed" result
-        from utils.preprocessor import TraditionalDenoiser
+        # Save noisy image
+        noisy_img = Image.fromarray((noisy_array * 255).astype(np.uint8))
+        noisy_img.save(noisy_path)
+        
+        # Apply traditional denoising
         denoiser = TraditionalDenoiser(method='bilateral')
         denoised_array = denoiser.denoise(noisy_array)
         
         # Convert back to PIL image
         denoised_img = Image.fromarray((denoised_array * 255).astype(np.uint8))
+        denoised_img.save(denoised_path)
+        
+        # Calculate metrics
+        metrics = calculate_metrics(img_array, denoised_array)
     else:
         # Load the actual model and process the image
         # Load data
@@ -75,21 +93,41 @@ def process_image(image_path, model_path):
         # Load model
         model = DenoisingAutoencoder.load(model_path)
         
-        # Process image
+        # Add noise to create a noisy version
+        noise_gen = NoiseGenerator()
+        noisy = noise_gen.add_noise(image)[0]
+        
+        # Save noisy image
+        noisy_img = Image.fromarray((noisy * 255).astype(np.uint8))
+        noisy_img.save(noisy_path)
+        
+        # Process image with model
         denoised = model.predict(image)[0]
         
         # Clip values and convert to PIL Image
         denoised = np.clip(denoised, 0, 1)
         denoised_img = Image.fromarray((denoised * 255).astype(np.uint8))
+        denoised_img.save(denoised_path)
+        
+        # Calculate metrics
+        metrics = calculate_metrics(image[0], denoised)
     
-    # Generate unique filename for the result
-    result_filename = f"denoised_{uuid.uuid4().hex}.png"
-    result_path = os.path.join(app.config['RESULTS_FOLDER'], result_filename)
+    # Create combined visualization
+    combine_images(
+        image_path, 
+        noisy_path, 
+        denoised_path, 
+        save_path=combined_path,
+        metrics=metrics
+    )
     
-    # Save the denoised image
-    denoised_img.save(result_path)
-    
-    return result_filename
+    return {
+        'original': os.path.basename(image_path),
+        'noisy': noisy_filename,
+        'denoised': denoised_filename,
+        'combined': combined_filename,
+        'metrics': metrics
+    }
 
 @app.route('/')
 def index():
@@ -115,13 +153,16 @@ def denoise():
         file.save(file_path)
         
         # Process the image
-        result_filename = process_image(file_path, MODEL_PATH)
+        result = process_image(file_path, MODEL_PATH)
         
         # Return results
         return render_template(
             'result.html',
             original=url_for('uploaded_file', filename=unique_filename),
-            result=url_for('result_file', filename=result_filename)
+            noisy=url_for('result_file', filename=result['noisy']),
+            denoised=url_for('result_file', filename=result['denoised']),
+            combined=url_for('result_file', filename=result['combined']),
+            metrics=result['metrics']
         )
     
     return render_template('index.html', error='File type not allowed')

@@ -8,6 +8,8 @@ from keras.utils import img_to_array, load_img
 from keras.utils import to_categorical
 import cv2
 from sklearn.model_selection import train_test_split
+from PIL import Image
+import tensorflow as tf
 
 from config import DATA_CONFIG
 
@@ -100,3 +102,145 @@ class DataLoader:
         )
         
         return x_train, x_val, y_train, y_val
+
+class NoiseGenerator:
+    """
+    Class for adding various types of noise to images.
+    """
+    def __init__(self, noise_type=None, noise_params=None):
+        """
+        Initialize the noise generator.
+        
+        Args:
+            noise_type: Type of noise to add ('gaussian', 'salt_pepper', 'speckle', 'poisson')
+            noise_params: Parameters for the noise
+        """
+        self.noise_type = noise_type or DATA_CONFIG['default_noise']
+        self.noise_params = noise_params or self._get_default_params()
+    
+    def _get_default_params(self):
+        """Get default parameters for the selected noise type."""
+        if self.noise_type == 'gaussian':
+            return DATA_CONFIG['gaussian_params']
+        elif self.noise_type == 'salt_pepper':
+            return DATA_CONFIG['salt_pepper_params']
+        elif self.noise_type == 'speckle':
+            return DATA_CONFIG['speckle_params']
+        else:
+            # Default to Gaussian
+            return DATA_CONFIG['gaussian_params']
+    
+    def add_gaussian_noise(self, images, mean=0, std=0.1):
+        """
+        Add Gaussian noise to images.
+        
+        Args:
+            images: Numpy array of images (batch, height, width, channels)
+            mean: Mean of the Gaussian noise
+            std: Standard deviation of the Gaussian noise
+            
+        Returns:
+            Noisy images
+        """
+        # Generate Gaussian noise
+        noise = np.random.normal(mean, std, images.shape)
+        # Add noise to images
+        noisy_images = images + noise
+        # Clip to valid range
+        return np.clip(noisy_images, 0, 1)
+    
+    def add_salt_pepper_noise(self, images, amount=0.05):
+        """
+        Add salt and pepper noise to images.
+        
+        Args:
+            images: Numpy array of images (batch, height, width, channels)
+            amount: Fraction of the image to be replaced with noise
+            
+        Returns:
+            Noisy images
+        """
+        noisy_images = np.copy(images)
+        # Salt mode
+        salt_mask = np.random.random(images.shape) < amount / 2
+        noisy_images[salt_mask] = 1
+        
+        # Pepper mode
+        pepper_mask = np.random.random(images.shape) < amount / 2
+        noisy_images[pepper_mask] = 0
+        
+        return noisy_images
+    
+    def add_speckle_noise(self, images, mean=0, var=0.1):
+        """
+        Add speckle noise to images.
+        
+        Args:
+            images: Numpy array of images (batch, height, width, channels)
+            mean: Mean of the Gaussian noise
+            var: Variance of the Gaussian noise
+            
+        Returns:
+            Noisy images
+        """
+        # Generate speckle noise (multiplicative noise)
+        noise = np.random.normal(mean, var**0.5, images.shape)
+        # Add noise to images
+        noisy_images = images + images * noise
+        # Clip to valid range
+        return np.clip(noisy_images, 0, 1)
+    
+    def add_poisson_noise(self, images, lambda_val=30):
+        """
+        Add Poisson noise to images.
+        
+        Args:
+            images: Numpy array of images (batch, height, width, channels)
+            lambda_val: Lambda parameter for Poisson distribution
+            
+        Returns:
+            Noisy images
+        """
+        # Scale images to suitable range for Poisson noise
+        scaled_images = lambda_val * images
+        # Generate Poisson noise
+        noisy_images = np.random.poisson(scaled_images) / lambda_val
+        # Clip to valid range
+        return np.clip(noisy_images, 0, 1)
+    
+    def add_noise(self, images, noise_type=None, noise_params=None):
+        """
+        Add noise to images based on specified noise type.
+        
+        Args:
+            images: Numpy array of images (batch, height, width, channels)
+            noise_type: Type of noise to add (if None, use the instance's default)
+            noise_params: Parameters for the noise (if None, use the instance's default)
+            
+        Returns:
+            Noisy images
+        """
+        noise_type = noise_type or self.noise_type
+        noise_params = noise_params or self.noise_params
+        
+        if noise_type == 'gaussian':
+            mean = noise_params.get('mean', 0)
+            std = noise_params.get('std', 0.1)
+            return self.add_gaussian_noise(images, mean, std)
+        
+        elif noise_type == 'salt_pepper':
+            amount = noise_params.get('amount', 0.05)
+            return self.add_salt_pepper_noise(images, amount)
+        
+        elif noise_type == 'speckle':
+            mean = noise_params.get('mean', 0)
+            var = noise_params.get('var', 0.1)
+            return self.add_speckle_noise(images, mean, var)
+        
+        elif noise_type == 'poisson':
+            lambda_val = noise_params.get('lambda_val', 30)
+            return self.add_poisson_noise(images, lambda_val)
+        
+        else:
+            # Default to Gaussian noise
+            return self.add_gaussian_noise(images)

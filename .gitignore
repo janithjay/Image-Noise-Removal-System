@@ -3,3 +3,8 @@
 /__pycache__
 /static
 /utils/__pycache__
+/clean_images
+/results
+/models
+/logs
+/saved_models

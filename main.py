@@ -9,11 +9,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tensorflow.keras.preprocessing.image import img_to_array, array_to_img
 from PIL import Image
+import cv2
 
 from model import DenoisingAutoencoder, Trainer
 from utils.data_loader import DataLoader
 from utils.preprocessor import NoiseGenerator, ImagePreprocessor, TraditionalDenoiser
 from utils.visualizer import combine_images, calculate_metrics
+from utils.enhanced_denoiser import advanced_denoising, ensemble_denoising, detail_preserving_denoising, enhance_image_details
 
 def train_model(data_dir, model_save_dir, epochs=None):
     """
@@ -170,6 +172,83 @@ def denoise_image(image_path, model_path, output_path=None):
     
     return denoised_img
 
+def enhanced_denoise_image(image_path, output_path=None, method='ensemble', strength=8):
+    """
+    Denoise an image using enhanced methods that don't require training.
+    
+    Args:
+        image_path: Path to the image to denoise
+        output_path: Path to save the denoised image (optional)
+        method: Denoising method ('nlm', 'bilateral', 'tv', 'wavelet', 'combined', 'ensemble', 'detail-preserving')
+        strength: Denoising strength (1-10)
+        
+    Returns:
+        Denoised image as PIL Image
+    """
+    # Load image
+    print(f"Loading image: {image_path}")
+    original_img = Image.open(image_path)
+    original_array = img_to_array(original_img) / 255.0
+    
+    # Add noise if needed
+    print("Generating noisy version")
+    noise_gen = NoiseGenerator()
+    noisy_array = noise_gen.add_noise(np.expand_dims(original_array, axis=0))[0]
+    
+    # Save the noisy image
+    noisy_path = image_path.rsplit('.', 1)[0] + '_noisy.' + image_path.rsplit('.', 1)[1]
+    noisy_img = array_to_img(noisy_array)
+    noisy_img.save(noisy_path)
+    
+    # Apply denoising
+    print(f"Applying {method} denoising with strength {strength}")
+    if method == 'ensemble':
+        denoised_array = ensemble_denoising(noisy_array)
+    elif method == 'detail-preserving':
+        denoised_array = detail_preserving_denoising(noisy_array, strength=strength)
+    else:
+        denoised_array = advanced_denoising(noisy_array, method=method, strength=strength)
+    
+    # Enhance details and colors
+    print("Enhancing image details")
+    denoised_array = enhance_image_details(denoised_array, sharpness=1.5, saturation=1.2)
+    
+    # Convert to PIL Image
+    denoised_img = array_to_img(denoised_array)
+    
+    # Set default output path if not provided
+    if not output_path:
+        output_path = image_path.rsplit('.', 1)[0] + '_enhanced_denoised.' + image_path.rsplit('.', 1)[1]
+    
+    # Save denoised image
+    print(f"Saving denoised image to: {output_path}")
+    denoised_img.save(output_path)
+    
+    # Calculate metrics
+    metrics = calculate_metrics(original_array, denoised_array)
+    print(f"PSNR: {metrics['PSNR']:.2f} dB, SSIM: {metrics['SSIM']:.4f}")
+    
+    # Create and save combined visualization
+    combined_path = image_path.rsplit('.', 1)[0] + '_enhanced_combined.' + image_path.rsplit('.', 1)[1]
+    print(f"Creating combined visualization: {combined_path}")
+    combine_images(
+        image_path,
+        noisy_path,
+        output_path,
+        save_path=combined_path,
+        metrics=metrics
+    )
+    
+    # Display combined image
+    combined_img = Image.open(combined_path)
+    plt.figure(figsize=(15, 10))
+    plt.imshow(np.array(combined_img))
+    plt.axis('off')
+    plt.tight_layout()
+    plt.show()
+    
+    return denoised_img
+
 def main():
     """
     Main function to parse command line arguments and run the program.
@@ -185,10 +264,19 @@ def main():
     train_parser.add_argument('--epochs', type=int, help='Number of training epochs')
     
     # Denoise command
-    denoise_parser = subparsers.add_parser('denoise', help='Denoise an image')
-    denoise_parser.add_argument('--image', required=True, help='Path to the noisy image')
+    denoise_parser = subparsers.add_parser('denoise', help='Denoise an image using the trained model')
+    denoise_parser.add_argument('--image', required=True, help='Path to the image to denoise')
     denoise_parser.add_argument('--model', required=True, help='Path to the trained model')
     denoise_parser.add_argument('--output', help='Path to save the denoised image')
+    
+    # Enhanced denoise command (no training required)
+    enhanced_parser = subparsers.add_parser('enhance', help='Denoise an image using enhanced methods (no training required)')
+    enhanced_parser.add_argument('--image', required=True, help='Path to the image to denoise')
+    enhanced_parser.add_argument('--method', default='ensemble', choices=['nlm', 'bilateral', 'tv', 'wavelet', 'combined', 'ensemble', 'detail-preserving'],
+                                help='Denoising method')
+    enhanced_parser.add_argument('--strength', type=int, default=8, choices=range(1, 11),
+                                help='Denoising strength (1-10)')
+    enhanced_parser.add_argument('--output', help='Path to save the denoised image')
     
     args = parser.parse_args()
     
@@ -201,6 +289,8 @@ def main():
         train_model(args.data_dir, args.model_dir, args.epochs)
     elif args.command == 'denoise':
         denoise_image(args.image, args.model, args.output)
+    elif args.command == 'enhance':
+        enhanced_denoise_image(args.image, args.output, args.method, args.strength)
     else:
         parser.print_help()
 

@@ -4,9 +4,10 @@ Autoencoder architecture for noise reduction.
 
 import tensorflow as tf
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D, BatchNormalization
-from tensorflow.keras.layers import Concatenate, Add, Dropout, LeakyReLU
+from tensorflow.keras.layers import Concatenate, Add, Dropout, LeakyReLU, Multiply, GlobalAveragePooling2D, Dense, Reshape
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import ReduceLROnPlateau
 
 from config import MODEL_CONFIG, TRAINING_CONFIG
 from .losses import get_combined_loss
@@ -29,9 +30,9 @@ class Autoencoder:
         self.final_activation = MODEL_CONFIG['final_activation']
         self.latent_dim = MODEL_CONFIG['latent_dim']
         
-        self.learning_rate = TRAINING_CONFIG['learning_rate']
-        self.loss = TRAINING_CONFIG['loss']
-        self.optimizer_name = TRAINING_CONFIG['optimizer']
+        self.learning_rate = TRAINING_CONFIG['LEARNING_RATE']
+        self.loss = TRAINING_CONFIG.get('loss', 'mse')
+        self.optimizer_name = TRAINING_CONFIG.get('optimizer', 'adam')
 
         self.model = self._build_model()
     
@@ -142,19 +143,68 @@ class Autoencoder:
             filepath: Path to the saved model
             
         Returns:
-            Loaded model
+            Loaded model wrapped in a model wrapper with compile method
         """
-        return tf.keras.models.load_model(filepath)
+        # Import custom loss functions
+        from .losses import ssim_loss, perceptual_loss, combined_loss, get_combined_loss
+        
+        # Define custom objects dictionary to help with model loading
+        custom_objects = {
+            'mse': tf.keras.losses.MeanSquaredError(),
+            'ssim_loss': ssim_loss,
+            'perceptual_loss': perceptual_loss,
+            'combined_loss': combined_loss,
+            # Add other custom losses or metrics if needed
+        }
+        
+        # Load the model with custom objects
+        keras_model = tf.keras.models.load_model(filepath, custom_objects=custom_objects)
+        
+        # Create a simple wrapper class that provides the compile method
+        class ModelWrapper:
+            def __init__(self, model):
+                self.model = model
+                self.learning_rate = TRAINING_CONFIG['LEARNING_RATE']
+                self.loss = TRAINING_CONFIG.get('loss', 'mse')
+                self.optimizer_name = TRAINING_CONFIG.get('optimizer', 'adam')
+            
+            def compile(self, learning_rate=None):
+                """
+                Compile the model with the specified learning rate.
+                
+                Args:
+                    learning_rate: Learning rate for the optimizer (optional)
+                """
+                if learning_rate:
+                    self.learning_rate = learning_rate
+                
+                optimizer = Adam(learning_rate=self.learning_rate)
+                
+                # Use the current loss function from the model
+                loss_function = self.model.loss
+                
+                self.model.compile(optimizer=optimizer, loss=loss_function)
+                return self.model
+            
+            def predict(self, *args, **kwargs):
+                return self.model.predict(*args, **kwargs)
+            
+            def save(self, filepath):
+                self.model.save(filepath)
+        
+        # Return a wrapped model
+        return ModelWrapper(keras_model)
 
 
-def residual_block(x, filters, kernel_size=3):
+def residual_block(x, filters, kernel_size=3, dropout_rate=0.0):
     """
-    Create a residual block.
+    Create a residual block with improved feature extraction.
     
     Args:
         x: Input tensor
         filters: Number of filters
         kernel_size: Kernel size for convolutions
+        dropout_rate: Dropout rate for regularization
         
     Returns:
         Output tensor
@@ -167,6 +217,10 @@ def residual_block(x, filters, kernel_size=3):
     x = BatchNormalization()(x)
     x = LeakyReLU(alpha=0.2)(x)
     
+    # Apply dropout if specified
+    if dropout_rate > 0:
+        x = Dropout(dropout_rate)(x)
+    
     # Second convolution
     x = Conv2D(filters, kernel_size, padding='same')(x)
     x = BatchNormalization()(x)
@@ -174,6 +228,80 @@ def residual_block(x, filters, kernel_size=3):
     # Add shortcut
     x = Add()([x, shortcut])
     x = LeakyReLU(alpha=0.2)(x)
+    
+    return x
+
+
+def channel_attention(x, ratio=16):
+    """
+    Channel attention module - helps model focus on important feature channels.
+    
+    Args:
+        x: Input tensor
+        ratio: Reduction ratio for the dense layer
+        
+    Returns:
+        Output tensor with attention applied
+    """
+    channel = x.shape[-1]
+    
+    # Global average pooling
+    avg_pool = GlobalAveragePooling2D()(x)
+    
+    # FC layers with shared weights for channel attention
+    fc1 = Dense(channel // ratio, activation='relu')(avg_pool)
+    fc2 = Dense(channel, activation='sigmoid')(fc1)
+    
+    # Reshape to proper dimensions
+    fc2 = Reshape((1, 1, channel))(fc2)
+    
+    # Apply attention
+    return Multiply()([x, fc2])
+
+
+def spatial_attention(x):
+    """
+    Spatial attention module - helps model focus on important spatial regions.
+    
+    Args:
+        x: Input tensor
+        
+    Returns:
+        Output tensor with attention applied
+    """
+    # Average pooling along channels
+    avg_pool = tf.reduce_mean(x, axis=-1, keepdims=True)
+    
+    # Max pooling along channels
+    max_pool = tf.reduce_max(x, axis=-1, keepdims=True)
+    
+    # Concatenate pooling results
+    concat = Concatenate()([avg_pool, max_pool])
+    
+    # Apply convolution
+    spatial = Conv2D(1, kernel_size=7, padding='same', activation='sigmoid')(concat)
+    
+    # Apply attention
+    return Multiply()([x, spatial])
+
+
+def cbam_block(x, ratio=16):
+    """
+    Convolutional Block Attention Module (CBAM).
+    Combines channel and spatial attention.
+    
+    Args:
+        x: Input tensor
+        ratio: Reduction ratio for channel attention
+        
+    Returns:
+        Output tensor with attention applied
+    """
+    # Apply channel attention
+    x = channel_attention(x, ratio)
+    
+    # Apply spatial attention
+    x = spatial_attention(x)
     
     return x
 
@@ -208,9 +336,11 @@ class DenoisingAutoencoder(Autoencoder):
         # Input
         inputs = Input(shape=self.input_shape)
         
-        # Use skip connections if enabled
-        use_skip = MODEL_CONFIG.get('use_skip_connections', False)
+        # Get configuration settings
+        use_skip = MODEL_CONFIG.get('use_skip_connections', True)
         use_residual = MODEL_CONFIG.get('use_residual_blocks', False)
+        use_attention = MODEL_CONFIG.get('use_attention', False)
+        dropout_rate = MODEL_CONFIG.get('dropout_rate', 0.0)
         
         # Store encoder outputs for skip connections
         skip_connections = []
@@ -223,9 +353,17 @@ class DenoisingAutoencoder(Autoencoder):
             x = BatchNormalization()(x)
             x = LeakyReLU(alpha=0.2)(x)
             
+            # Apply dropout if specified
+            if dropout_rate > 0:
+                x = Dropout(dropout_rate)(x)
+            
             # Apply residual block if enabled
             if use_residual:
-                x = residual_block(x, filters, self.kernel_size)
+                x = residual_block(x, filters, self.kernel_size, dropout_rate)
+            
+            # Apply attention if enabled
+            if use_attention:
+                x = cbam_block(x)
             
             # Second convolution block
             x = Conv2D(filters, self.kernel_size, padding='same')(x)
@@ -236,37 +374,41 @@ class DenoisingAutoencoder(Autoencoder):
             if use_skip and i < len(self.filters) - 1:
                 skip_connections.append(x)
             
-            # Apply pooling except for the last encoder layer
+            # Downsample (except for the last encoder block)
             if i < len(self.filters) - 1:
                 x = MaxPooling2D((2, 2))(x)
-                
-            # Add dropout for regularization in deeper layers
-            if i >= 1:
-                x = Dropout(0.2)(x)
         
-        # Bottleneck
-        bottleneck = x
+        # Bottleneck - additional processing at the bottleneck layer
+        if use_residual:
+            x = residual_block(x, self.filters[-1], self.kernel_size, dropout_rate)
         
-        # Decoder
+        if use_attention:
+            x = cbam_block(x)
+        
+        # Decoder - Upsampling with skip connections
         for i, filters in enumerate(reversed(self.filters[:-1])):
-            # Upsampling
+            # Upsample
             x = UpSampling2D((2, 2))(x)
             x = Conv2D(filters, self.kernel_size, padding='same')(x)
             x = BatchNormalization()(x)
             x = LeakyReLU(alpha=0.2)(x)
             
-            # Skip connection
-            if use_skip:
-                x = Concatenate()([x, skip_connections[-(i+1)]])
+            # Apply dropout if specified
+            if dropout_rate > 0:
+                x = Dropout(dropout_rate)(x)
             
-            # First convolution block after skip connection
-            x = Conv2D(filters, self.kernel_size, padding='same')(x)
-            x = BatchNormalization()(x)
-            x = LeakyReLU(alpha=0.2)(x)
+            # Add skip connection if enabled
+            if use_skip:
+                skip_index = len(skip_connections) - i - 1
+                x = Concatenate()([x, skip_connections[skip_index]])
             
             # Apply residual block if enabled
             if use_residual:
-                x = residual_block(x, filters, self.kernel_size)
+                x = residual_block(x, filters, self.kernel_size, dropout_rate)
+            
+            # Apply attention if enabled
+            if use_attention:
+                x = cbam_block(x)
             
             # Second convolution block
             x = Conv2D(filters, self.kernel_size, padding='same')(x)
@@ -274,12 +416,16 @@ class DenoisingAutoencoder(Autoencoder):
             x = LeakyReLU(alpha=0.2)(x)
         
         # Output layer
-        outputs = Conv2D(self.input_shape[2], 1, activation=self.final_activation, padding='same')(x)
+        x = Conv2D(self.input_shape[2], 3, padding='same', activation=self.final_activation)(x)
+        
+        # Residual learning - add input to output for easier learning of noise pattern
+        if MODEL_CONFIG.get('use_residual_learning', False):
+            x = Add()([x, inputs])
         
         # Create model
-        model = Model(inputs, outputs)
+        model = Model(inputs, outputs=x)
         
-        # Compile model
+        # Compile model with appropriate optimizer and loss
         if self.optimizer_name.lower() == 'adam':
             optimizer = Adam(learning_rate=self.learning_rate)
         else:
@@ -295,7 +441,47 @@ class DenoisingAutoencoder(Autoencoder):
             loss_function = get_combined_loss(alpha, beta, gamma)
         else:
             loss_function = self.loss
-            
+        
         model.compile(optimizer=optimizer, loss=loss_function)
         
         return model
+
+    def build(self):
+        """
+        Build and return the model.
+        
+        Returns:
+            The built model
+        """
+        self.model = self._build_unet_model()
+        return self.model
+    
+    def compile(self, learning_rate=None):
+        """
+        Compile the model with the specified learning rate.
+        
+        Args:
+            learning_rate: Learning rate for the optimizer (optional)
+        """
+        if learning_rate:
+            self.learning_rate = learning_rate
+        
+        if self.optimizer_name.lower() == 'adam':
+            optimizer = Adam(learning_rate=self.learning_rate)
+        else:
+            optimizer = self.optimizer_name
+        
+        # Use appropriate loss function
+        if self.loss == 'mse':
+            loss_function = 'mse'
+        elif self.loss == 'combined':
+            alpha = TRAINING_CONFIG['loss_weights']['mse']
+            beta = TRAINING_CONFIG['loss_weights']['ssim'] 
+            gamma = TRAINING_CONFIG['loss_weights']['perceptual']
+            loss_function = get_combined_loss(alpha, beta, gamma)
+        else:
+            loss_function = self.loss
+        
+        self.model.compile(optimizer=optimizer, loss=loss_function)
+        
+        return self.model

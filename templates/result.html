@@ -124,6 +124,7 @@
                     <strong>SSIM:</strong> {{ "%.4f"|format(metrics.SSIM) }}
                     (Structural Similarity Index - closer to 1 is better)
                 </p>
+                <p><em>The neural network model was used for denoising.</em></p>
             </div>
             {% endif %}
             
@@ -147,18 +148,19 @@
             <div class="btn-group">
                 <a href="/" class="btn">Process Another Image</a>
                 <a href="{{ combined }}" download class="btn">Download Combined View</a>
+                <a href="{{ denoised }}" download class="btn">Download Denoised Image</a>
             </div>
         </div>
         
         <div class="card">
             <h3>About the Denoising Process</h3>
-            <p>The system has successfully processed your image using an advanced autoencoder neural network. The denoising algorithm identifies noise patterns while preserving important image details and structures.</p>
+            <p>The system has successfully processed your image using our advanced neural network model. Compare the side-by-side results to see how the noise has been removed while preserving important details.</p>
             <p>The combined visualization shows the original image, the noisy version, and the denoised result side by side for easy comparison. The metrics provide a quantitative measure of denoising performance.</p>
         </div>
     </div>
     
     <footer class="container">
-        <p>Image Noise Removal System &copy; 2023</p>
+        <p>Image Noise Removal System &copy; 2025</p>
     </footer>
 </body>
 </html> 

@@ -11,7 +11,7 @@ from PIL import Image
 
 from model import DenoisingAutoencoder
 from utils.data_loader import DataLoader
-from utils.preprocessor import NoiseGenerator, TraditionalDenoiser
+from utils.preprocessor import NoiseGenerator
 from utils.visualizer import combine_images, calculate_metrics
 
 app = Flask(__name__)
@@ -35,13 +35,12 @@ def allowed_file(filename):
     """Check if file extension is allowed."""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def process_image(image_path, model_path):
+def process_image(image_path):
     """
     Process an image using the trained model.
     
     Args:
         image_path: Path to the input image
-        model_path: Path to the trained model
         
     Returns:
         Paths to the processed images (original, noisy, denoised, combined)
@@ -56,42 +55,17 @@ def process_image(image_path, model_path):
     denoised_path = os.path.join(app.config['RESULTS_FOLDER'], denoised_filename)
     combined_path = os.path.join(app.config['RESULTS_FOLDER'], combined_filename)
     
-    # Check if model exists
-    if not os.path.exists(model_path):
-        # If model doesn't exist, add noise manually as a demo
-        print("Model not found. Using traditional denoising as a demo.")
-        
-        # Load and resize image
-        img = Image.open(image_path)
-        img = img.resize((256, 256))
-        img_array = np.array(img) / 255.0
-        
-        # Add noise for demonstration
-        noise_gen = NoiseGenerator()
-        noisy_array = noise_gen.add_noise(np.expand_dims(img_array, axis=0))[0]
-        
-        # Save noisy image
-        noisy_img = Image.fromarray((noisy_array * 255).astype(np.uint8))
-        noisy_img.save(noisy_path)
-        
-        # Apply traditional denoising
-        denoiser = TraditionalDenoiser(method='bilateral')
-        denoised_array = denoiser.denoise(noisy_array)
-        
-        # Convert back to PIL image
-        denoised_img = Image.fromarray((denoised_array * 255).astype(np.uint8))
-        denoised_img.save(denoised_path)
-        
-        # Calculate metrics
-        metrics = calculate_metrics(img_array, denoised_array)
-    else:
-        # Load the actual model and process the image
+    try:
+        # Check if model exists
+        if not os.path.exists(MODEL_PATH):
+            raise FileNotFoundError(f"Model not found at {MODEL_PATH}")
+            
         # Load data
         data_loader = DataLoader()
         image = data_loader.load_single_image(image_path)
         
         # Load model
-        model = DenoisingAutoencoder.load(model_path)
+        model = DenoisingAutoencoder.load(MODEL_PATH)
         
         # Add noise to create a noisy version
         noise_gen = NoiseGenerator()
@@ -109,25 +83,67 @@ def process_image(image_path, model_path):
         denoised_img = Image.fromarray((denoised * 255).astype(np.uint8))
         denoised_img.save(denoised_path)
         
-        # Calculate metrics
-        metrics = calculate_metrics(image[0], denoised)
-    
-    # Create combined visualization
-    combine_images(
-        image_path, 
-        noisy_path, 
-        denoised_path, 
-        save_path=combined_path,
-        metrics=metrics
-    )
-    
-    return {
-        'original': os.path.basename(image_path),
-        'noisy': noisy_filename,
-        'denoised': denoised_filename,
-        'combined': combined_filename,
-        'metrics': metrics
-    }
+        # Calculate metrics with improved error handling
+        try:
+            metrics = calculate_metrics(image[0], denoised)
+            # Check if metrics calculation failed
+            if metrics['PSNR'] == 0 and metrics['SSIM'] == 0:
+                print("Warning: Model metrics calculation returned zeros, trying with saved images")
+                metrics = calculate_metrics(image_path, denoised_path)
+        except Exception as e:
+            print(f"Error calculating metrics for model: {str(e)}")
+            metrics = {'PSNR': 0, 'SSIM': 0}
+        
+        # Create combined visualization
+        combine_images(
+            image_path, 
+            noisy_path, 
+            denoised_path, 
+            save_path=combined_path,
+            metrics=metrics
+        )
+        
+        return {
+            'original': os.path.basename(image_path),
+            'noisy': noisy_filename,
+            'denoised': denoised_filename,
+            'combined': combined_filename,
+            'metrics': metrics
+        }
+        
+    except Exception as e:
+        print(f"Critical error in image processing: {str(e)}")
+        # Create a default response with error message
+        
+        # Create a simple error image (solid gray with text)
+        error_img = Image.new('RGB', (256, 256), (200, 200, 200))
+        # Add text about the error if possible
+        try:
+            from PIL import ImageDraw, ImageFont
+            draw = ImageDraw.Draw(error_img)
+            # Try to load a font, fall back to default if not available
+            try:
+                font = ImageFont.truetype("arial.ttf", 12)
+            except IOError:
+                font = ImageFont.load_default()
+                
+            draw.text((10, 120), f"Error processing image", fill=(0, 0, 0), font=font)
+        except:
+            pass
+            
+        # Save error images
+        error_img.save(noisy_path)
+        error_img.save(denoised_path)
+        error_img.save(combined_path)
+        
+        # Return dummy data
+        return {
+            'original': os.path.basename(image_path),
+            'noisy': noisy_filename,
+            'denoised': denoised_filename,
+            'combined': combined_filename,
+            'metrics': {'PSNR': 0, 'SSIM': 0}
+        }
 
 @app.route('/')
 def index():
@@ -152,10 +168,9 @@ def denoise():
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
         file.save(file_path)
         
-        # Process the image
-        result = process_image(file_path, MODEL_PATH)
+        # Process the image with the neural network model
+        result = process_image(file_path)
         
-        # Return results
         return render_template(
             'result.html',
             original=url_for('uploaded_file', filename=unique_filename),

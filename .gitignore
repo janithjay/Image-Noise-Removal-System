@@ -8,3 +8,6 @@
 /models
 /logs
 /saved_models
+/converted_models
+/uploads
+/test_output

@@ -135,12 +135,13 @@ class Autoencoder:
         self.model.save(filepath)
     
     @staticmethod
-    def load(filepath):
+    def load(filepath, custom_objects=None):
         """
         Load a model from disk.
         
         Args:
             filepath: Path to the saved model
+            custom_objects: Dictionary of custom objects for model loading
             
         Returns:
             Loaded model wrapped in a model wrapper with compile method
@@ -149,7 +150,7 @@ class Autoencoder:
         from .losses import ssim_loss, perceptual_loss, combined_loss, get_combined_loss
         
         # Define custom objects dictionary to help with model loading
-        custom_objects = {
+        base_custom_objects = {
             'mse': tf.keras.losses.MeanSquaredError(),
             'ssim_loss': ssim_loss,
             'perceptual_loss': perceptual_loss,
@@ -157,8 +158,12 @@ class Autoencoder:
             # Add other custom losses or metrics if needed
         }
         
+        # Merge with additional custom objects if provided
+        if custom_objects:
+            base_custom_objects.update(custom_objects)
+        
         # Load the model with custom objects
-        keras_model = tf.keras.models.load_model(filepath, custom_objects=custom_objects)
+        keras_model = tf.keras.models.load_model(filepath, custom_objects=base_custom_objects)
         
         # Create a simple wrapper class that provides the compile method
         class ModelWrapper:
@@ -308,7 +313,8 @@ def cbam_block(x, ratio=16):
 
 class DenoisingAutoencoder(Autoencoder):
     """
-    Specialized autoencoder for denoising tasks using U-Net architecture with skip connections.
+    Specialized autoencoder for denoising tasks using an advanced U-Net architecture 
+    with skip connections, residual blocks, dense connections, and attention mechanisms.
     """
     def __init__(self, input_shape=None):
         """
@@ -326,9 +332,103 @@ class DenoisingAutoencoder(Autoencoder):
         # Restore original build_model method
         self._build_model = self._original_build_model
     
+    def _dense_block(self, x, filters, kernel_size=3, dropout_rate=0.0):
+        """
+        Create a dense block with improved feature extraction.
+        
+        Args:
+            x: Input tensor
+            filters: Number of filters
+            kernel_size: Kernel size for convolutions
+            dropout_rate: Dropout rate for regularization
+            
+        Returns:
+            Output tensor and concatenated features
+        """
+        concat_feat = x
+        
+        for i in range(3):  # 3 layers in each dense block
+            # Feature computation with concatenated inputs
+            x1 = Conv2D(filters, kernel_size, padding='same')(concat_feat)
+            x1 = BatchNormalization()(x1)
+            x1 = LeakyReLU(alpha=0.2)(x1)
+            
+            if dropout_rate > 0:
+                x1 = Dropout(dropout_rate)(x1)
+                
+            # Concatenate with previous features for dense connectivity
+            concat_feat = Concatenate()([concat_feat, x1])
+            
+        return concat_feat
+    
+    def _transition_down(self, x, filters):
+        """
+        Transition down block for encoder path.
+        
+        Args:
+            x: Input tensor
+            filters: Number of filters
+            
+        Returns:
+            Output tensor
+        """
+        x = Conv2D(filters, 1, padding='same')(x)  # 1x1 conv to reduce channels
+        x = BatchNormalization()(x)
+        x = LeakyReLU(alpha=0.2)(x)
+        x = MaxPooling2D(2)(x)
+        return x
+    
+    def _transition_up(self, x, filters):
+        """
+        Transition up block for decoder path.
+        
+        Args:
+            x: Input tensor
+            filters: Number of filters
+            
+        Returns:
+            Output tensor
+        """
+        x = UpSampling2D(2)(x)
+        x = Conv2D(filters, 1, padding='same')(x)  # 1x1 conv to reduce channels
+        x = BatchNormalization()(x)
+        x = LeakyReLU(alpha=0.2)(x)
+        return x
+    
+    def _enhanced_attention_block(self, x, skip_connection):
+        """
+        Enhanced attention gate that helps focus on relevant features from skip connection.
+        
+        Args:
+            x: Gating signal (from upsampling path)
+            skip_connection: Skip connection signal
+            
+        Returns:
+            Attention weighted skip connection
+        """
+        filters = x.shape[-1]
+        
+        # Process gating signal
+        g = Conv2D(filters, 1, padding='same')(x)
+        g = BatchNormalization()(g)
+        
+        # Process skip connection
+        f = Conv2D(filters, 1, padding='same')(skip_connection)
+        f = BatchNormalization()(f)
+        
+        # Attention map
+        h = LeakyReLU(alpha=0.2)(g + f)
+        h = Conv2D(filters, 1, padding='same')(h)
+        h = BatchNormalization()(h)
+        h = tf.nn.sigmoid(h)  # Attention coefficients
+        
+        # Apply attention
+        return h * skip_connection
+    
     def _build_unet_model(self):
         """
-        Build a U-Net model with skip connections and residual blocks.
+        Build an advanced U-Net model with dense blocks, residual learning,
+        enhanced attention mechanisms, and dual-path skip connections.
         
         Returns:
             Compiled Keras model
@@ -338,92 +438,83 @@ class DenoisingAutoencoder(Autoencoder):
         
         # Get configuration settings
         use_skip = MODEL_CONFIG.get('use_skip_connections', True)
-        use_residual = MODEL_CONFIG.get('use_residual_blocks', False)
-        use_attention = MODEL_CONFIG.get('use_attention', False)
-        dropout_rate = MODEL_CONFIG.get('dropout_rate', 0.0)
+        use_residual = MODEL_CONFIG.get('use_residual_blocks', True)
+        use_attention = MODEL_CONFIG.get('use_attention', True)
+        use_residual_learning = MODEL_CONFIG.get('use_residual_learning', True)
+        dropout_rate = MODEL_CONFIG.get('dropout_rate', 0.1)
         
         # Store encoder outputs for skip connections
         skip_connections = []
         
-        # Encoder
-        x = inputs
+        # Initial convolution
+        x = Conv2D(self.filters[0], 3, padding='same')(inputs)
+        x = BatchNormalization()(x)
+        x = LeakyReLU(alpha=0.2)(x)
+        
+        # Encoder with dense blocks
         for i, filters in enumerate(self.filters):
-            # First convolution block
-            x = Conv2D(filters, self.kernel_size, padding='same')(x)
-            x = BatchNormalization()(x)
-            x = LeakyReLU(alpha=0.2)(x)
-            
-            # Apply dropout if specified
-            if dropout_rate > 0:
-                x = Dropout(dropout_rate)(x)
-            
-            # Apply residual block if enabled
-            if use_residual:
-                x = residual_block(x, filters, self.kernel_size, dropout_rate)
-            
-            # Apply attention if enabled
-            if use_attention:
-                x = cbam_block(x)
-            
-            # Second convolution block
-            x = Conv2D(filters, self.kernel_size, padding='same')(x)
-            x = BatchNormalization()(x)
-            x = LeakyReLU(alpha=0.2)(x)
+            # Dense block
+            x = self._dense_block(x, filters, dropout_rate=dropout_rate)
             
             # Store for skip connection
             if use_skip and i < len(self.filters) - 1:
                 skip_connections.append(x)
             
-            # Downsample (except for the last encoder block)
+            # Transition down (except for the last encoder block)
             if i < len(self.filters) - 1:
-                x = MaxPooling2D((2, 2))(x)
+                x = self._transition_down(x, self.filters[i+1])
         
-        # Bottleneck - additional processing at the bottleneck layer
+        # Bottleneck - additional processing
         if use_residual:
-            x = residual_block(x, self.filters[-1], self.kernel_size, dropout_rate)
+            x = residual_block(x, self.filters[-1], dropout_rate=dropout_rate)
         
         if use_attention:
             x = cbam_block(x)
         
-        # Decoder - Upsampling with skip connections
+        # Decoder - Upsampling with skip connections and attention
         for i, filters in enumerate(reversed(self.filters[:-1])):
-            # Upsample
-            x = UpSampling2D((2, 2))(x)
-            x = Conv2D(filters, self.kernel_size, padding='same')(x)
-            x = BatchNormalization()(x)
-            x = LeakyReLU(alpha=0.2)(x)
+            # Transition up
+            x = self._transition_up(x, filters)
             
-            # Apply dropout if specified
-            if dropout_rate > 0:
-                x = Dropout(dropout_rate)(x)
-            
-            # Add skip connection if enabled
+            # Apply attention to skip connection if enabled
             if use_skip:
                 skip_index = len(skip_connections) - i - 1
-                x = Concatenate()([x, skip_connections[skip_index]])
+                skip = skip_connections[skip_index]
+                
+                if use_attention:
+                    # Apply attention gates
+                    skip = self._enhanced_attention_block(x, skip)
+                
+                # Concatenate with skip connection
+                x = Concatenate()([x, skip])
+            
+            # Dense block in decoder
+            x = self._dense_block(x, filters, dropout_rate=dropout_rate)
             
             # Apply residual block if enabled
             if use_residual:
-                x = residual_block(x, filters, self.kernel_size, dropout_rate)
-            
-            # Apply attention if enabled
-            if use_attention:
-                x = cbam_block(x)
-            
-            # Second convolution block
-            x = Conv2D(filters, self.kernel_size, padding='same')(x)
-            x = BatchNormalization()(x)
-            x = LeakyReLU(alpha=0.2)(x)
+                x = residual_block(x, filters, dropout_rate=dropout_rate)
+        
+        # Final convolution layers
+        x = Conv2D(64, 3, padding='same')(x)
+        x = BatchNormalization()(x)
+        x = LeakyReLU(alpha=0.2)(x)
+        
+        x = Conv2D(32, 3, padding='same')(x)
+        x = BatchNormalization()(x)
+        x = LeakyReLU(alpha=0.2)(x)
         
         # Output layer
         x = Conv2D(self.input_shape[2], 3, padding='same', activation=self.final_activation)(x)
         
         # Residual learning - add input to output for easier learning of noise pattern
-        if MODEL_CONFIG.get('use_residual_learning', False):
-            x = Add()([x, inputs])
+        if use_residual_learning:
+            outputs = Add()([x, inputs])
+        else:
+            outputs = x
         
         # Create model
-        model = Model(inputs, outputs=x)
+        model = Model(inputs, outputs)
         
         # Compile model with appropriate optimizer and loss
         if self.optimizer_name.lower() == 'adam':
@@ -438,7 +529,8 @@ class DenoisingAutoencoder(Autoencoder):
             alpha = TRAINING_CONFIG['loss_weights']['mse']
             beta = TRAINING_CONFIG['loss_weights']['ssim']
             gamma = TRAINING_CONFIG['loss_weights']['perceptual']
-            loss_function = get_combined_loss(alpha, beta, gamma)
+            delta = TRAINING_CONFIG['loss_weights'].get('edge', 0.1)  # Default to 0.1 if not defined
+            loss_function = get_combined_loss(alpha, beta, gamma, delta)
         else:
             loss_function = self.loss
         

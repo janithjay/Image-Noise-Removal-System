@@ -24,7 +24,8 @@ class DataLoader:
         Args:
             target_size: Size to resize images to (height, width)
         """
-        self.target_size = target_size or DATA_CONFIG['target_size']
+        # Use 256x256 as default size for compatibility with our converted model
+        self.target_size = target_size or (256, 256)
     
     def load_images_from_directory(self, directory, max_samples=None):
         """
@@ -40,7 +41,7 @@ class DataLoader:
         image_paths = []
         for root, _, files in os.walk(directory):
             for file in files:
-                if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.webp')):
                     image_paths.append(os.path.join(root, file))
         
         # Limit the number of samples if specified
@@ -50,11 +51,14 @@ class DataLoader:
         # Load and preprocess images
         images = []
         for path in image_paths:
-            img = load_img(path, target_size=self.target_size)
-            img_array = img_to_array(img)
-            # Normalize to [0, 1]
-            img_array = img_array / 255.0
-            images.append(img_array)
+            try:
+                # Use the single image loader to ensure consistency
+                img_array = self.load_single_image(path)
+                # Remove the batch dimension
+                img_array = img_array[0]
+                images.append(img_array)
+            except Exception as e:
+                print(f"Error loading image {path}: {str(e)}")
         
         return np.array(images)
     
@@ -68,14 +72,36 @@ class DataLoader:
         Returns:
             Preprocessed image as numpy array
         """
-        img = load_img(image_path, target_size=self.target_size)
-        img_array = img_to_array(img)
-        # Normalize to [0, 1]
-        img_array = img_array / 255.0
-        # Add batch dimension
-        img_array = np.expand_dims(img_array, axis=0)
-        
-        return img_array
+        # Use PIL for more control over the image loading process
+        with Image.open(image_path) as img:
+            # Always convert to RGB to avoid alpha channel issues
+            if img.mode != 'RGB':
+                print(f"Converting image from {img.mode} to RGB")
+                img = img.convert('RGB')
+            
+            # Resize to target size
+            if img.size != self.target_size:
+                img = img.resize((self.target_size[1], self.target_size[0]), Image.LANCZOS)
+            
+            # Convert to numpy array
+            img_array = np.array(img).astype(np.float32) / 255.0
+            
+            # Verify shape
+            if img_array.shape != (self.target_size[0], self.target_size[1], 3):
+                print(f"WARNING: Unexpected image shape after conversion: {img_array.shape}")
+                
+                # Handle different channel counts
+                if len(img_array.shape) == 3 and img_array.shape[2] > 3:
+                    # Has extra channels, keep only RGB
+                    img_array = img_array[:, :, :3]
+                elif len(img_array.shape) == 2:
+                    # Grayscale, convert to RGB
+                    img_array = np.stack([img_array] * 3, axis=-1)
+            
+            # Add batch dimension
+            img_array = np.expand_dims(img_array, axis=0)
+            
+            return img_array
     
     def prepare_train_val_data(self, clean_images, noisy_images=None, test_size=0.2, random_state=42):
         """

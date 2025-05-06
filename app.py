@@ -68,36 +68,35 @@ def load_denoising_model():
             
             def __init__(self, model):
                 self.model = model
+                # Get input shape for debugging
+                self.input_shape = tuple(model.input.shape[1:])
+                print(f"Model input shape: {self.input_shape}")
+                # Get output shape for debugging
+                self.output_shape = tuple(model.output.shape[1:])
+                print(f"Model output shape: {self.output_shape}")
             
-            def predict(self, image_data):
+            def predict(self, input_data):
                 """
                 Run prediction on image data.
                 
                 Args:
-                    image_data: Input image as numpy array in uint8 [0-255] or float32 [0-1]
+                    input_data: Input image as numpy array in uint8 [0-255] or float32 [0-1]
                     
                 Returns:
                     Denoised image as numpy array in the same format as input
                 """
                 # Store original dtype and range
-                original_dtype = image_data.dtype
+                original_dtype = input_data.dtype
                 is_uint8 = original_dtype == np.uint8
                 
                 # Normalize the input to 0-1 range if needed
                 if is_uint8:
-                    image_data = image_data.astype(np.float32) / 255.0
+                    input_data = input_data.astype(np.float32) / 255.0
                 
-                # Make sure we have a batch dimension
-                need_reshape = len(image_data.shape) == 3
-                if need_reshape:
-                    image_data = np.expand_dims(image_data, 0)
-                
-                # Get the model's prediction
-                denoised = self.model.predict(image_data)
-                
-                # Remove batch dimension if it was added
-                if need_reshape:
-                    denoised = denoised[0]
+                # Use model for prediction
+                print(f"Running prediction with input shape: {input_data.shape}")
+                denoised = self.model.predict(input_data)
+                print(f"Prediction output shape: {denoised.shape}")
                 
                 # Ensure output is in 0-1 range
                 if denoised.max() > 1.0:

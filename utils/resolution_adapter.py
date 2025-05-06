@@ -29,7 +29,21 @@ class ResolutionAdapter:
         self.overlap = overlap
         
         # Get the model's expected input shape
-        self.model_input_shape = tuple(model.model.input.shape[1:3])
+        # Check if this is a wrapper or direct TensorFlow model
+        if hasattr(model, 'model'):
+            # It's a wrapper
+            self.model_input_shape = tuple(model.model.input.shape[1:3])
+        else:
+            # Direct TensorFlow model
+            self.model_input_shape = tuple(model.input.shape[1:3])
+            
+        # Print info for debugging
+        print(f"Model input shape: {self.model_input_shape}")
+        
+        # Set reasonable defaults if shape can't be determined
+        if not all(self.model_input_shape):
+            print("WARNING: Could not determine model input shape, using default (256, 256)")
+            self.model_input_shape = (256, 256)
     
     def _split_into_patches(self, image, patch_size):
         """
@@ -45,9 +59,23 @@ class ResolutionAdapter:
         h, w = image.shape[:2]
         patch_h, patch_w = patch_size
         
+        # Handle case where the image is smaller than the patch size
+        if h < patch_h or w < patch_w:
+            # Resize the image to match at least the patch size
+            new_h = max(h, patch_h)
+            new_w = max(w, patch_w)
+            resized = tf.image.resize(image, [new_h, new_w]).numpy()
+            # Extract a single patch (the entire image)
+            patch = resized[:patch_h, :patch_w]
+            return [patch], [(0, 0)]
+        
         # Calculate stride (accounting for overlap)
         stride_h = int(patch_h * (1 - self.overlap))
         stride_w = int(patch_w * (1 - self.overlap))
+        
+        # Ensure stride is at least 1
+        stride_h = max(1, stride_h)
+        stride_w = max(1, stride_w)
         
         # Calculate number of patches in each dimension
         n_h = math.ceil((h - patch_h) / stride_h) + 1
@@ -79,6 +107,16 @@ class ResolutionAdapter:
                     patches.append(patch)
                     positions.append((y, x))
         
+        # If no valid patches were created, create at least one
+        if not patches:
+            # Pad the image to create a valid patch
+            padded = np.pad(image, 
+                            [(0, max(0, patch_h - h)), 
+                             (0, max(0, patch_w - w)), 
+                             (0, 0)], mode='reflect')
+            patches = [padded[:patch_h, :patch_w]]
+            positions = [(0, 0)]
+            
         return patches, positions
     
     def _merge_patches(self, patches, positions, output_shape):
@@ -146,6 +184,28 @@ class ResolutionAdapter:
         
         return result
     
+    def _predict_with_model(self, batch):
+        """
+        Helper method to predict with the model, handling both wrappers and direct models.
+        
+        Args:
+            batch: Input batch as numpy array
+            
+        Returns:
+            Model prediction
+        """
+        try:
+            # Check if this is a wrapper or direct TensorFlow model
+            if hasattr(self.model, 'model'):
+                # It's a wrapper
+                return self.model.model.predict(batch)
+            else:
+                # Direct TensorFlow model
+                return self.model.predict(batch)
+        except AttributeError:
+            # Try using a generic predict method
+            return self.model.predict(batch)
+    
     def process_image(self, image):
         """
         Process an image at any resolution.
@@ -156,83 +216,94 @@ class ResolutionAdapter:
         Returns:
             Denoised image as PIL Image
         """
-        # Convert to numpy array if PIL Image
-        if isinstance(image, Image.Image):
-            # Store original mode for later
-            original_mode = image.mode
-            
-            # Resize if target size is specified
-            if self.target_size is not None:
-                image = image.resize(self.target_size[::-1])  # PIL uses (width, height)
-            
-            # Convert to numpy array
-            image_array = img_to_array(image) / 255.0
-        else:
-            # Already numpy array
-            image_array = image.copy()
-            # Assume RGB if it has 3 channels
-            original_mode = 'RGB' if image_array.shape[-1] == 3 else 'L'
-            
-            # Resize if target size is specified
-            if self.target_size is not None:
-                image_array = tf.image.resize(
-                    image_array, self.target_size).numpy()
-        
-        # Save original shape and number of channels
-        original_shape = image_array.shape
-        original_channels = original_shape[-1]
-        
-        # If the image is smaller than model input, handle directly
-        if original_shape[0] <= self.model_input_shape[0] and original_shape[1] <= self.model_input_shape[1]:
-            # Pad if necessary
-            pad_h = max(0, self.model_input_shape[0] - original_shape[0])
-            pad_w = max(0, self.model_input_shape[1] - original_shape[1])
-            
-            if pad_h > 0 or pad_w > 0:
-                padding = [(0, pad_h), (0, pad_w), (0, 0)]
-                padded = np.pad(image_array, padding, mode='reflect')
-                # Process padded image
-                batch = np.expand_dims(padded, axis=0)
-                denoised_batch = self.model.model.predict(batch)
-                # Unpad result
-                denoised_array = denoised_batch[0, :original_shape[0], :original_shape[1]]
-            else:
-                # Process directly
-                batch = np.expand_dims(image_array, axis=0)
-                denoised_batch = self.model.model.predict(batch)
-                denoised_array = denoised_batch[0]
-        else:
-            # Split into patches
-            patches, positions = self._split_into_patches(image_array, self.model_input_shape)
-            
-            # Process each patch
-            processed_patches = []
-            for patch in patches:
-                # Ensure patch shape matches model input
-                if patch.shape[:2] != self.model_input_shape:
-                    patch = tf.image.resize(patch, self.model_input_shape).numpy()
+        try:
+            # Convert to numpy array if PIL Image
+            if isinstance(image, Image.Image):
+                # Store original mode for later
+                original_mode = image.mode
                 
-                # Process patch
-                batch = np.expand_dims(patch, axis=0)
-                denoised_batch = self.model.model.predict(batch)
-                processed_patches.append(denoised_batch[0])
+                # Resize if target size is specified
+                if self.target_size is not None:
+                    image = image.resize(self.target_size[::-1])  # PIL uses (width, height)
+                
+                # Convert to numpy array
+                image_array = img_to_array(image) / 255.0
+            else:
+                # Already numpy array
+                image_array = image.copy()
+                # Assume RGB if it has 3 channels
+                original_mode = 'RGB' if image_array.shape[-1] == 3 else 'L'
+                
+                # Resize if target size is specified
+                if self.target_size is not None:
+                    image_array = tf.image.resize(
+                        image_array, self.target_size).numpy()
             
-            # Merge patches
-            denoised_array = self._merge_patches(processed_patches, positions, original_shape)
-        
-        # Clip to valid range
-        denoised_array = np.clip(denoised_array, 0, 1)
-        
-        # Handle channel mismatch (if model outputs grayscale but input was RGB)
-        if denoised_array.shape[-1] == 1 and original_channels == 3:
-            # Repeat the grayscale channel to create an RGB image
-            denoised_array = np.repeat(denoised_array, 3, axis=-1)
-        elif denoised_array.shape[-1] == 3 and original_channels == 1:
-            # Take the average of RGB channels to get grayscale
-            denoised_array = np.mean(denoised_array, axis=-1, keepdims=True)
-        
-        # Convert back to PIL Image
-        return array_to_img(denoised_array)
+            # Save original shape and number of channels
+            original_shape = image_array.shape
+            original_channels = original_shape[-1]
+            
+            # If the image is smaller than model input, handle directly
+            if original_shape[0] <= self.model_input_shape[0] and original_shape[1] <= self.model_input_shape[1]:
+                # Pad if necessary
+                pad_h = max(0, self.model_input_shape[0] - original_shape[0])
+                pad_w = max(0, self.model_input_shape[1] - original_shape[1])
+                
+                if pad_h > 0 or pad_w > 0:
+                    padding = [(0, pad_h), (0, pad_w), (0, 0)]
+                    padded = np.pad(image_array, padding, mode='reflect')
+                    # Process padded image
+                    batch = np.expand_dims(padded, axis=0)
+                    denoised_batch = self._predict_with_model(batch)
+                    # Unpad result
+                    denoised_array = denoised_batch[0, :original_shape[0], :original_shape[1]]
+                else:
+                    # Process directly
+                    batch = np.expand_dims(image_array, axis=0)
+                    denoised_batch = self._predict_with_model(batch)
+                    denoised_array = denoised_batch[0]
+            else:
+                # Split into patches
+                patches, positions = self._split_into_patches(image_array, self.model_input_shape)
+                
+                # Process each patch
+                processed_patches = []
+                for patch in patches:
+                    # Ensure patch shape matches model input
+                    if patch.shape[:2] != self.model_input_shape:
+                        patch = tf.image.resize(patch, self.model_input_shape).numpy()
+                    
+                    # Process patch
+                    batch = np.expand_dims(patch, axis=0)
+                    denoised_batch = self._predict_with_model(batch)
+                    processed_patches.append(denoised_batch[0])
+                
+                # Merge patches
+                denoised_array = self._merge_patches(processed_patches, positions, original_shape)
+            
+            # Clip to valid range
+            denoised_array = np.clip(denoised_array, 0, 1)
+            
+            # Handle channel mismatch (if model outputs grayscale but input was RGB)
+            if denoised_array.shape[-1] == 1 and original_channels == 3:
+                # Repeat the grayscale channel to create an RGB image
+                denoised_array = np.repeat(denoised_array, 3, axis=-1)
+            elif denoised_array.shape[-1] == 3 and original_channels == 1:
+                # Take the average of RGB channels to get grayscale
+                denoised_array = np.mean(denoised_array, axis=-1, keepdims=True)
+            
+            # Convert back to PIL Image
+            return array_to_img(denoised_array)
+            
+        except Exception as e:
+            print(f"Error in ResolutionAdapter.process_image: {e}")
+            # Fallback: if something goes wrong, do minimal processing and return
+            if isinstance(image, Image.Image):
+                # Just return the original image
+                return image
+            else:
+                # Convert numpy array to PIL image
+                return array_to_img(image)
     
     def process_batch(self, images):
         """

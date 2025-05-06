@@ -32,9 +32,28 @@ def load_denoising_model(model_path='saved_models/denoising_model_best.keras'):
         class ModelWrapper:
             def __init__(self, model):
                 self.model = model
+                # Get input shape for debugging
+                self.input_shape = tuple(model.input.shape[1:])
+                print(f"Model input shape: {self.input_shape}")
+                # Get output shape for debugging
+                self.output_shape = tuple(model.output.shape[1:])
+                print(f"Model output shape: {self.output_shape}")
                 
-            def predict(self, batch):
-                return self.model.predict(batch)
+            def predict(self, input_data):
+                """
+                Run prediction on image data.
+                
+                Args:
+                    input_data: Input image as numpy array
+                    
+                Returns:
+                    Denoised image as numpy array
+                """
+                # Use model for prediction
+                print(f"Running prediction with input shape: {input_data.shape}")
+                output = self.model.predict(input_data)
+                print(f"Prediction output shape: {output.shape}")
+                return output
                 
         # Create and return the resolution adapter
         return ResolutionAdapter(ModelWrapper(model), target_size=None, overlap=0.25)

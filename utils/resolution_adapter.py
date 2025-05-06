@@ -95,6 +95,14 @@ class ResolutionAdapter:
         """
         h, w, c = output_shape
         patch_h, patch_w = patches[0].shape[:2]
+        patch_c = patches[0].shape[2]
+        
+        # If patches have a different number of channels than output_shape,
+        # adjust the output shape accordingly
+        if patch_c != c:
+            # Use the patch channels as they are what the model outputs
+            output_shape = (h, w, patch_c)
+            c = patch_c
         
         # Create weight mask for blending patches
         y_ramp = np.ones((patch_h, 1))
@@ -126,12 +134,15 @@ class ResolutionAdapter:
             
             # Add to result and accumulate weights
             result[y:y+patch_h, x:x+patch_w] += weighted_patch
-            weights[y:y+patch_h, x:x+patch_w] += patch_weight
+            weights[y:y+patch_h, x:x+patch_w] += patch_weight[:,:,:1]  # Only need one channel for weights
         
         # Normalize by accumulated weights
         # Add small epsilon to avoid division by zero
         epsilon = 1e-10
-        result = result / (weights + epsilon)
+        
+        # Broadcast weights to all channels
+        broadcast_weights = np.repeat(weights, result.shape[2], axis=2)
+        result = result / (broadcast_weights + epsilon)
         
         return result
     
@@ -147,6 +158,9 @@ class ResolutionAdapter:
         """
         # Convert to numpy array if PIL Image
         if isinstance(image, Image.Image):
+            # Store original mode for later
+            original_mode = image.mode
+            
             # Resize if target size is specified
             if self.target_size is not None:
                 image = image.resize(self.target_size[::-1])  # PIL uses (width, height)
@@ -156,14 +170,17 @@ class ResolutionAdapter:
         else:
             # Already numpy array
             image_array = image.copy()
+            # Assume RGB if it has 3 channels
+            original_mode = 'RGB' if image_array.shape[-1] == 3 else 'L'
             
             # Resize if target size is specified
             if self.target_size is not None:
                 image_array = tf.image.resize(
                     image_array, self.target_size).numpy()
         
-        # Save original shape
+        # Save original shape and number of channels
         original_shape = image_array.shape
+        original_channels = original_shape[-1]
         
         # If the image is smaller than model input, handle directly
         if original_shape[0] <= self.model_input_shape[0] and original_shape[1] <= self.model_input_shape[1]:
@@ -205,6 +222,14 @@ class ResolutionAdapter:
         
         # Clip to valid range
         denoised_array = np.clip(denoised_array, 0, 1)
+        
+        # Handle channel mismatch (if model outputs grayscale but input was RGB)
+        if denoised_array.shape[-1] == 1 and original_channels == 3:
+            # Repeat the grayscale channel to create an RGB image
+            denoised_array = np.repeat(denoised_array, 3, axis=-1)
+        elif denoised_array.shape[-1] == 3 and original_channels == 1:
+            # Take the average of RGB channels to get grayscale
+            denoised_array = np.mean(denoised_array, axis=-1, keepdims=True)
         
         # Convert back to PIL Image
         return array_to_img(denoised_array)

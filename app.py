@@ -234,5 +234,10 @@ def result_file(filename):
     """Serve result files."""
     return send_from_directory(app.config['RESULTS_FOLDER'], filename)
 
+@app.route('/templates/css/<filename>')
+def template_css(filename):
+    """Serve CSS files from templates directory."""
+    return send_from_directory('templates/css', filename)
+
 if __name__ == '__main__':
     app.run(debug=True) 

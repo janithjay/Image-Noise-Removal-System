@@ -1,3 +1,5 @@
+#this code used to finetune the base model created by train_denoising_model.py in kaggle environment
+
 import os
 import numpy as np
 import matplotlib.pyplot as plt

@@ -1,164 +1,132 @@
 # Image Noise Removal System
 
-A deep learning-based system for removing noise from images using an autoencoder neural network architecture.
+A machine learning-based system for removing noise from images using a U-Net architecture trained on the Berkeley Segmentation Dataset (BSDS500).
 
 ## Features
 
-- Remove multiple types of noise from images (Gaussian, salt and pepper, speckle, Poisson)
-- Web interface for easy image upload and processing
-- Command-line interface for batch processing
-- Training functionality to create custom models
-- Fine-tuning capabilities to improve model performance on specific types of images or noise
+- **U-Net Denoising Model**: Uses a specialized U-Net architecture to effectively remove noise while preserving image details.
+- **Resolution Independence**: Handles images of any size through an intelligent patch-based processing system.
+- **Web Interface**: Easy-to-use web application for quick image denoising.
+- **Command-line Interface**: Simple CLI for batch processing of images.
 
 ## Installation
 
-1. Clone this repository:
-   ```
-   git clone https://github.com/yourusername/Image-Noise-Removal-System.git
-   cd Image-Noise-Removal-System
-   ```
+### Prerequisites
+- Python 3.10+
+- TensorFlow 2.18+
+- Flask
 
-2. Create a virtual environment (optional but recommended):
-   ```
-   python -m venv .venv
-   .venv\Scripts\activate  # Windows
-   source .venv/bin/activate  # Linux/Mac
-   ```
+### Setup
+1. Clone the repository
+```bash
+git clone https://github.com/yourusername/Image-Noise-Removal-System.git
+cd Image-Noise-Removal-System
+```
 
-3. Install the required packages:
-   ```
-   pip install -r requirements.txt
-   ```
+2. Install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+3. Run the application
+```bash
+python app.py
+```
 
 ## Usage
 
 ### Web Interface
+1. Open a web browser and navigate to `http://127.0.0.1:5000/`
+2. Upload an image through the interface
+3. View and download the denoised result
 
-1. Start the web application:
-   ```
-   python app.py
-   ```
+### Command-line Interface
+```bash
+# Denoise a single image
+python main.py denoise path/to/your/image.jpg
 
-2. Open your browser and navigate to `http://127.0.0.1:5000`
-
-3. Upload a noisy image through the web interface and view the denoised result
-
-### Command Line Interface
-
-#### Training a Model
-
-To train a new model on your dataset:
-
-```
-python train_model.py
+# Specify output path
+python main.py denoise path/to/your/image.jpg --output path/to/save/denoised.jpg
 ```
 
-Optional arguments:
-- `--epochs`: Number of training epochs (overrides config)
+## Technical Details
 
-#### Fine-tuning a Model
+### Model Architecture
+The system uses a specialized U-Net denoising model implemented in the `model/autoencoder.py` file with the following components:
+- **Encoder**: Convolutional blocks with max pooling for feature extraction
+- **Bridge**: Convolutional layers
+- **Decoder**: Upsampling blocks with skip connections to preserve details
+- **Output Layer**: Convolutional layer with appropriate activation
 
-To fine-tune an existing model for improved performance:
+### Resolution Adapter
+- Handles images of any size by dividing large images into overlapping patches
+- Processes each patch with the fixed-size model
+- Seamlessly combines processed patches with weighted blending to avoid edge artifacts
+- Implemented in `utils/resolution_adapter.py`
 
-```
-python fine_tune.py --model-path models/best_model.h5
-```
+## Training Details
 
-Optional arguments:
-- `--learning-rate`: Learning rate for fine-tuning (default: 0.0001)
-- `--epochs`: Number of epochs for fine-tuning (default: 20)
-- `--batch-size`: Batch size for training (default: 4)
-- `--noise-types`: Comma-separated list of noise types to use (default: gaussian)
-  - Options: gaussian, poisson, salt_pepper, speckle, all
-- `--augmentation`: Enable data augmentation for training
-- `--visualize-layers`: Visualize model layers and feature maps
-- `--results-dir`: Directory to save results (default: results/)
-- `--image-dir`: Directory containing clean images for training (default: clean_images/)
+### Dataset
+- **Training Data**: Berkeley Segmentation Dataset (BSDS500)
+- **Noise Generation**: Synthetic Gaussian noise applied to clean images
+- **Data Augmentation**: Data augmentation techniques to increase training data variety
 
-Example of fine-tuning with multiple noise types and data augmentation:
-```
-python fine_tune.py --model-path models/best_model.h5 --learning-rate 0.0001 --epochs 30 --noise-types gaussian,salt_pepper --augmentation
-```
-
-#### Denoising Images
-
-To denoise a single image:
-
-```
-python main.py denoise --image path/to/noisy/image.jpg --model path/to/model.h5 --output path/to/save/denoised.jpg
-```
-
-## Model Architecture
-
-The system uses a convolutional autoencoder architecture with advanced features:
-
-1. **Encoder**: Reduces the dimensionality of the image while preserving essential features
-2. **Bottleneck**: The compressed representation of the image
-3. **Decoder**: Reconstructs the image from the compressed representation, removing noise
-4. **Skip Connections**: U-Net style connections to preserve spatial information
-5. **Attention Mechanism**: Helps the model focus on important features
-6. **Residual Blocks**: Improves gradient flow and feature preservation
-
-## Configuration
-
-System parameters can be modified in the `config.py` file:
-
-- Model architecture parameters
-- Training parameters
-- Data processing settings
-- Noise generation parameters
-
-## Advanced Denoising Techniques
-
-This system implements several advanced techniques to improve denoising quality:
-
-1. **Attention Mechanism**: Uses CBAM (Convolutional Block Attention Module) to focus on important features
-2. **Residual Learning**: Residual connections make it easier to learn the noise pattern
-3. **Multi-scale Processing**: Different filter sizes capture features at various scales
-4. **Combined Loss Function**: Uses a weighted combination of MSE, SSIM, and perceptual loss
-
-## Fine-tuning Process
-
-The fine-tuning process helps adapt a pre-trained model to specific types of images or noise:
-
-1. Start with a pre-trained model
-2. Use a lower learning rate (typically 10% of the original)
-3. Train on your specific dataset with the types of noise you want to target
-4. Optionally use data augmentation to improve generalization
-5. Monitor performance using PSNR, SSIM, and other quality metrics
-6. Save the fine-tuned model for future use
+### Training Strategy
+- **Loss Function**: Implemented in `model/losses.py`
+- **Training Scripts**: Available in `train_denoising_model.py` and `finetune_denoising_model.py`
+- **Fine-tuning Capabilities**: Salt and pepper noise model fine-tuning available in `finetune_salt_pepper_model.py`
 
 ## Directory Structure
 
 ```
 Image-Noise-Removal-System/
-├── app.py                  # Web application
-├── config.py               # Configuration parameters
-├── main.py                 # Command-line interface
-├── train_model.py          # Model training script
-├── fine_tune.py            # Model fine-tuning script
-├── model/                  # Model architecture and training
-│   ├── __init__.py
-│   ├── autoencoder.py      # Autoencoder model implementation
-│   ├── trainer.py          # Model training utilities
-│   └── losses.py           # Custom loss functions
-├── utils/                  # Utility functions
-│   ├── __init__.py
-│   ├── data_loader.py      # Data loading utilities
-│   ├── preprocessor.py     # Image preprocessing utilities
-│   └── visualizer.py       # Visualization utilities
-├── static/                 # Static files for web app
-├── templates/              # HTML templates for web app
-├── requirements.txt        # Required packages
-└── README.md               # This file
+├── app.py                      # Web application
+├── config.py                   # Configuration parameters
+├── main.py                     # Command-line interface
+├── train_denoising_model.py    # Model training script
+├── finetune_denoising_model.py # Model fine-tuning script
+├── finetune_salt_pepper_model.py # Salt and pepper noise fine-tuning
+├── utils/                      # Utility functions
+│   ├── resolution_adapter.py   # Handles images of varying sizes
+│   ├── data_loader.py          # Data loading utilities
+│   ├── visualizer.py           # Visualization tools
+│   ├── enhanced_denoiser.py    # Enhanced denoising functionality
+│   └── preprocessor.py         # Image preprocessing tools
+├── model/                      # Model architecture and training
+│   ├── autoencoder.py          # U-Net model implementation
+│   ├── losses.py               # Loss functions
+│   ├── trainer.py              # Training utilities
+│   └── __init__.py             # Module initialization
+├── saved_models/               # Stored model files
+│   └── denoising_model_best.keras  # Main denoising model
+├── static/                     # Static files for web app
+│   ├── uploads/                # Temporary storage for uploaded images
+│   └── results/                # Storage for processed images
+├── templates/                  # HTML templates for web app
+│   ├── index.html              # Main web interface
+│   └── result.html             # Result display page
+├── install_dependencies.py     # Helper script for dependencies
+├── run.bat                     # Batch file for Windows execution
+└── requirements.txt            # Required packages
 ```
 
-## License
+## System Requirements
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+- **Python**: 3.10+
+- **TensorFlow**: 2.18/2.19
+- **Memory**: 4GB+ recommended
+- **Disk Space**: 500MB for model and dependencies
+- **GPU**: Optional but recommended for faster processing
+
+## Future Improvements
+- Add batch processing for multiple images in the web interface
+- Implement image enhancement options beyond denoising
+- Add fine-grained noise level control
+- Create specialized models for different noise types
+- Add progress indicators for large image processing
 
 ## Acknowledgments
 
 - TensorFlow team for their deep learning framework
-- The scikit-image project for image processing utilities
-- OpenCV contributors for computer vision tools 
+- Berkeley Vision and Learning Center for the BSDS500 dataset
+- Python Imaging Library (PIL) contributors 
